@@ -53,6 +53,10 @@ def create_mesh(heightmap, scale=(1.0, 1.0, 1.0), decimate=1):
         vertices: Nx3 array of vertex positions
         faces: Mx3 array of triangle indices
     """
+    # Flip Y-axis: image Y=0 is top, but 3D Y=0 is bottom
+    # This makes image top → mesh north (positive Y)
+    heightmap = np.flipud(heightmap)
+
     # Decimate if requested
     if decimate > 1:
         heightmap = heightmap[::decimate, ::decimate]
