@@ -110,7 +110,49 @@ img = np.array(Image.open('your_map.png'))
 print(f"Color at (y=400, x=300): {img[400, 300, :3]}")  # Sample a point
 ```
 
+## Heightmap to 3D Mesh
+
+Convert heightmaps directly to 3D mesh files using `heightmap_to_mesh.py`:
+
+```bash
+# Convert to OBJ (recommended for Blender)
+python heightmap_to_mesh.py output/map_08_heightmap_16bit.png -o terrain.obj
+
+# With scale: width=100, depth=100, height exaggeration=20
+python heightmap_to_mesh.py heightmap.png -o terrain.obj --scale 100,100,20
+
+# Reduce resolution for large heightmaps (1/16 triangles)
+python heightmap_to_mesh.py heightmap.png -o terrain.obj --decimate 4
+
+# Export as STL for 3D printing
+python heightmap_to_mesh.py heightmap.png -o terrain.stl --scale 100,100,10
+```
+
+### Mesh Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--output`, `-o` | required | Output file (.obj, .stl, or .ply) |
+| `--scale`, `-s` | `1,1,1` | Scale as X,Y,Z (width, depth, height) |
+| `--decimate`, `-d` | `1` | Decimation factor (2=half res, 4=quarter) |
+| `--no-normals` | flag | Skip normal calculation (faster) |
+| `--ascii-stl` | flag | ASCII STL format (larger but readable) |
+
+### Output Formats
+
+- **OBJ**: Recommended for Blender, includes normals
+- **STL**: Best for 3D printing (binary format by default)
+- **PLY**: Alternative format with normal support
+
 ## Using in Blender
+
+### Method 1: Import Pre-built Mesh (Recommended)
+
+1. Generate mesh: `python heightmap_to_mesh.py heightmap.png -o terrain.obj --scale 100,100,20`
+2. In Blender: File → Import → Wavefront (.obj)
+3. Select the generated `.obj` file
+
+### Method 2: Displace Modifier
 
 1. Create a plane mesh, subdivide it (e.g., 500x500)
 2. Add a **Displace** modifier
