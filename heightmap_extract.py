@@ -99,8 +99,8 @@ MASK_COLORS = [
 # Processing parameters
 MASK_THRESHOLD = 30       # Color distance threshold for masking
 SMOOTHING_SIGMA = 3.0     # Gaussian smoothing sigma
-ELEVATION_MIN = -3000     # Minimum elevation for normalization
-ELEVATION_MAX = 5000      # Maximum elevation for normalization
+ELEVATION_MIN = -5000     # Default minimum elevation for normalization
+ELEVATION_MAX = 6000      # Default maximum elevation for normalization
 
 
 def load_colormap(path):
@@ -120,6 +120,12 @@ def load_colormap(path):
         ...
       ]
     }
+
+    Returns:
+        elevation_colors: List of (rgb, elevation) tuples
+        mask_colors: List of rgb values
+        elev_min: Minimum elevation in colormap
+        elev_max: Maximum elevation in colormap
     """
     with open(path) as f:
         data = json.load(f)
@@ -127,7 +133,11 @@ def load_colormap(path):
     elevation_colors = [(item['rgb'], item['elevation']) for item in data['elevation_colors']]
     mask_colors = [item['rgb'] for item in data.get('mask_colors', [])]
 
-    return elevation_colors, mask_colors
+    elevations = [item['elevation'] for item in data['elevation_colors']]
+    elev_min = min(elevations)
+    elev_max = max(elevations)
+
+    return elevation_colors, mask_colors, elev_min, elev_max
 
 
 def load_image(path):
@@ -244,23 +254,24 @@ def save_heightmap(heightmap, output_path, bits=16, elev_min=ELEVATION_MIN, elev
     img.save(output_path)
 
 
-def create_visualization(map_region, heightmap, mask, output_path):
+def create_visualization(map_region, heightmap, mask, output_path,
+                         elev_min=ELEVATION_MIN, elev_max=ELEVATION_MAX):
     """Create visualization of the extraction process."""
     fig, axes = plt.subplots(2, 2, figsize=(14, 12))
-    
+
     axes[0, 0].imshow(map_region)
     axes[0, 0].set_title("Original map region")
     axes[0, 0].axis('off')
-    
-    im1 = axes[0, 1].imshow(heightmap, cmap='terrain', vmin=-1000, vmax=2000)
+
+    im1 = axes[0, 1].imshow(heightmap, cmap='cividis', vmin=elev_min, vmax=elev_max)
     axes[0, 1].set_title("Extracted heightmap")
     axes[0, 1].axis('off')
     plt.colorbar(im1, ax=axes[0, 1], label='Elevation (m)', shrink=0.8)
-    
+
     axes[1, 0].imshow(mask, cmap='gray')
     axes[1, 0].set_title(f"Masked regions: {100*mask.mean():.1f}%")
     axes[1, 0].axis('off')
-    
+
     # 3D preview
     ax3d = fig.add_subplot(2, 2, 4, projection='3d')
     h, w = heightmap.shape
@@ -269,14 +280,14 @@ def create_visualization(map_region, heightmap, mask, output_path):
     Z = heightmap[::step, ::step]
     ax3d.plot_surface(X_grid, Y_grid, Z, cmap='terrain', linewidth=0, antialiased=True)
     ax3d.set_title("3D Preview")
-    
+
     plt.tight_layout()
     plt.savefig(output_path, dpi=150)
     plt.close()
 
 
 def process_map(input_path, output_dir='.', margins=None, smoothing=SMOOTHING_SIGMA,
-                elevation_colors=None, mask_colors=None):
+                elevation_colors=None, mask_colors=None, elev_min=None, elev_max=None):
     """
     Main processing pipeline.
 
@@ -287,6 +298,8 @@ def process_map(input_path, output_dir='.', margins=None, smoothing=SMOOTHING_SI
         smoothing: Gaussian smoothing sigma (0 to disable)
         elevation_colors: List of (rgb, elevation) tuples, or None for defaults
         mask_colors: List of rgb values to mask, or None for defaults
+        elev_min: Minimum elevation for normalization, or None for default
+        elev_max: Maximum elevation for normalization, or None for default
 
     Returns:
         Dict with paths to output files
@@ -295,6 +308,10 @@ def process_map(input_path, output_dir='.', margins=None, smoothing=SMOOTHING_SI
         elevation_colors = ELEVATION_COLORS
     if mask_colors is None:
         mask_colors = MASK_COLORS
+    if elev_min is None:
+        elev_min = ELEVATION_MIN
+    if elev_max is None:
+        elev_max = ELEVATION_MAX
 
     os.makedirs(output_dir, exist_ok=True)
     base_name = os.path.splitext(os.path.basename(input_path))[0]
@@ -354,31 +371,36 @@ def process_map(input_path, output_dir='.', margins=None, smoothing=SMOOTHING_SI
 
     # Step 4: heightmap before interpolation (with holes)
     path_raw = os.path.join(output_dir, f"{base_name}_04_heightmap_raw.png")
-    save_heightmap(np.nan_to_num(heightmap, nan=ELEVATION_MIN), path_raw, bits=8)
+    save_heightmap(np.nan_to_num(heightmap, nan=elev_min), path_raw, bits=8,
+                   elev_min=elev_min, elev_max=elev_max)
     outputs['heightmap_raw'] = path_raw
     print(f"  Saved: {path_raw}")
 
     # Step 5: heightmap after interpolation, before smoothing
     path_filled = os.path.join(output_dir, f"{base_name}_05_heightmap_filled.png")
-    save_heightmap(heightmap_filled, path_filled, bits=8)
+    save_heightmap(heightmap_filled, path_filled, bits=8,
+                   elev_min=elev_min, elev_max=elev_max)
     outputs['heightmap_filled'] = path_filled
     print(f"  Saved: {path_filled}")
 
     # Step 6: final heightmap (16-bit)
     path_16bit = os.path.join(output_dir, f"{base_name}_06_heightmap_16bit.png")
-    save_heightmap(heightmap_final, path_16bit, bits=16)
+    save_heightmap(heightmap_final, path_16bit, bits=16,
+                   elev_min=elev_min, elev_max=elev_max)
     outputs['heightmap_16bit'] = path_16bit
     print(f"  Saved: {path_16bit}")
 
     # Step 6: final heightmap (8-bit preview)
     path_8bit = os.path.join(output_dir, f"{base_name}_06_heightmap_8bit.png")
-    save_heightmap(heightmap_final, path_8bit, bits=8)
+    save_heightmap(heightmap_final, path_8bit, bits=8,
+                   elev_min=elev_min, elev_max=elev_max)
     outputs['heightmap_8bit'] = path_8bit
     print(f"  Saved: {path_8bit}")
 
     # Step 7: visualization
     path_viz = os.path.join(output_dir, f"{base_name}_07_visualization.png")
-    create_visualization(map_region, heightmap_final, mask, path_viz)
+    create_visualization(map_region, heightmap_final, mask, path_viz,
+                         elev_min=elev_min, elev_max=elev_max)
     outputs['visualization'] = path_viz
     print(f"  Saved: {path_viz}")
     
@@ -434,14 +456,17 @@ Notes:
 
     elevation_colors = None
     mask_colors = None
+    elev_min = None
+    elev_max = None
     if args.colormap and os.path.exists(args.colormap):
         print(f"Loading colormap: {args.colormap}")
-        elevation_colors, mask_colors = load_colormap(args.colormap)
+        elevation_colors, mask_colors, elev_min, elev_max = load_colormap(args.colormap)
+        print(f"  Elevation range: {elev_min}m to {elev_max}m")
     elif args.colormap and args.colormap != 'cmap.json':
         print(f"Warning: colormap file '{args.colormap}' not found, using defaults")
 
     process_map(args.input, args.output_dir, margins, args.smoothing,
-                elevation_colors, mask_colors)
+                elevation_colors, mask_colors, elev_min, elev_max)
 
 
 if __name__ == '__main__':
