@@ -1,0 +1,31 @@
+{
+  "name": "hypsometric_standard",
+  "description": "Standard hypsometric coloring extracted from map legend",
+  "elevation_colors": [
+    {"rgb": [255, 251, 250], "elevation": 4500},
+    {"rgb": [255, 252, 238], "elevation": 3500},
+    {"rgb": [255, 249, 234], "elevation": 3000},
+    {"rgb": [246, 241, 219], "elevation": 2500},
+    {"rgb": [241, 236, 204], "elevation": 2000},
+    {"rgb": [230, 226, 188], "elevation": 1500},
+    {"rgb": [225, 223, 172], "elevation": 1300},
+    {"rgb": [200, 211, 153], "elevation": 1000},
+    {"rgb": [191, 203, 137], "elevation": 700},
+    {"rgb": [184, 203, 137], "elevation": 500},
+    {"rgb": [150, 179, 115], "elevation": 300},
+    {"rgb": [151, 190, 125], "elevation": 100},
+    {"rgb": [206, 242, 254], "elevation": 0},
+    {"rgb": [148, 196, 206], "elevation": -500},
+    {"rgb": [135, 177, 191], "elevation": -2000},
+    {"rgb": [136, 179, 188], "elevation": -3500},
+    {"rgb": [146, 186, 196], "elevation": -5000}
+  ],
+  "mask_colors": [
+    {"rgb": [255, 255, 255], "description": "white background"},
+    {"rgb": [254, 254, 254], "description": "near-white"},
+    {"rgb": [0, 0, 0], "description": "black text"},
+    {"rgb": [50, 50, 50], "description": "dark gray text"},
+    {"rgb": [180, 30, 30], "description": "red border"},
+    {"rgb": [200, 50, 50], "description": "red border variant"}
+  ]
+}

@@ -21,6 +21,7 @@ your specific map and update the LUT accordingly.
 """
 
 import argparse
+import json
 import os
 import numpy as np
 from PIL import Image
@@ -102,6 +103,33 @@ ELEVATION_MIN = -3000     # Minimum elevation for normalization
 ELEVATION_MAX = 5000      # Maximum elevation for normalization
 
 
+def load_colormap(path):
+    """
+    Load elevation colors from JSON file.
+
+    Expected JSON format:
+    {
+      "elevation_colors": [
+        {"rgb": [255, 251, 250], "elevation": 4500},
+        {"rgb": [151, 190, 125], "elevation": 100},
+        ...
+      ],
+      "mask_colors": [
+        {"rgb": [255, 255, 255], "description": "white background"},
+        {"rgb": [0, 0, 0], "description": "black text"},
+        ...
+      ]
+    }
+    """
+    with open(path) as f:
+        data = json.load(f)
+
+    elevation_colors = [(item['rgb'], item['elevation']) for item in data['elevation_colors']]
+    mask_colors = [item['rgb'] for item in data.get('mask_colors', [])]
+
+    return elevation_colors, mask_colors
+
+
 def load_image(path):
     """Load image and convert to numpy array."""
     img = Image.open(path)
@@ -133,12 +161,12 @@ def extract_map_region(img_array, margins=None):
         Cropped map region
     """
     if margins is None:
-        # Default margins - adjust based on your map
+        # Default: no cropping
         margins = {
-            'top': 60,
-            'bottom': 50,
+            'top': 0,
+            'bottom': 0,
             'left': 0,
-            'right': 400  # Exclude legend on right
+            'right': 0
         }
     
     h, w = img_array.shape[:2]
@@ -148,16 +176,19 @@ def extract_map_region(img_array, margins=None):
     ]
 
 
-def colors_to_elevation(map_region, color_tree, mask_tree, lut_elevations, 
+def colors_to_elevation(map_region, color_tree, mask_tree, lut_elevations,
                         mask_threshold=MASK_THRESHOLD):
     """
     Convert map colors to elevation values.
-    
+
     Returns:
         heightmap: 2D array of elevation values (NaN where masked)
         mask: 2D boolean array indicating masked pixels
     """
     h, w, c = map_region.shape
+    # Handle RGBA images by taking only RGB channels
+    if c == 4:
+        map_region = map_region[:, :, :3]
     pixels = map_region.reshape(-1, 3)
     
     # Find nearest elevation color for each pixel
@@ -244,29 +275,37 @@ def create_visualization(map_region, heightmap, mask, output_path):
     plt.close()
 
 
-def process_map(input_path, output_dir='.', margins=None, smoothing=SMOOTHING_SIGMA):
+def process_map(input_path, output_dir='.', margins=None, smoothing=SMOOTHING_SIGMA,
+                elevation_colors=None, mask_colors=None):
     """
     Main processing pipeline.
-    
+
     Args:
         input_path: Path to input map image
         output_dir: Directory for output files
         margins: Optional crop margins dict
         smoothing: Gaussian smoothing sigma (0 to disable)
-    
+        elevation_colors: List of (rgb, elevation) tuples, or None for defaults
+        mask_colors: List of rgb values to mask, or None for defaults
+
     Returns:
         Dict with paths to output files
     """
+    if elevation_colors is None:
+        elevation_colors = ELEVATION_COLORS
+    if mask_colors is None:
+        mask_colors = MASK_COLORS
+
     os.makedirs(output_dir, exist_ok=True)
     base_name = os.path.splitext(os.path.basename(input_path))[0]
-    
+
     print(f"Loading image: {input_path}")
     img_array = load_image(input_path)
     print(f"  Shape: {img_array.shape}, dtype: {img_array.dtype}")
-    
+
     print("Building color lookup tables...")
-    color_tree, mask_tree, lut_elevations = build_color_trees(ELEVATION_COLORS, MASK_COLORS)
-    print(f"  {len(ELEVATION_COLORS)} elevation colors, {len(MASK_COLORS)} mask colors")
+    color_tree, mask_tree, lut_elevations = build_color_trees(elevation_colors, mask_colors)
+    print(f"  {len(elevation_colors)} elevation colors, {len(mask_colors)} mask colors")
     
     print("Extracting map region...")
     map_region = extract_map_region(img_array, margins)
@@ -290,18 +329,55 @@ def process_map(input_path, output_dir='.', margins=None, smoothing=SMOOTHING_SI
     
     # Save outputs
     outputs = {}
-    
-    path_16bit = os.path.join(output_dir, f"{base_name}_heightmap_16bit.png")
+
+    # Step 1: cropped map region
+    path_cropped = os.path.join(output_dir, f"{base_name}_01_cropped.png")
+    Image.fromarray(map_region).save(path_cropped)
+    outputs['cropped'] = path_cropped
+    print(f"  Saved: {path_cropped}")
+
+    # Step 2: mask visualization
+    path_mask = os.path.join(output_dir, f"{base_name}_02_mask.png")
+    mask_img = (mask * 255).astype(np.uint8)
+    Image.fromarray(mask_img, mode='L').save(path_mask)
+    outputs['mask'] = path_mask
+    print(f"  Saved: {path_mask}")
+
+    # Step 3: map with masked regions shown (magenta overlay)
+    path_masked_map = os.path.join(output_dir, f"{base_name}_03_masked_overlay.png")
+    map_rgb = map_region[:, :, :3] if map_region.shape[2] == 4 else map_region
+    masked_overlay = map_rgb.copy()
+    masked_overlay[mask] = [255, 0, 255]  # Magenta for masked pixels
+    Image.fromarray(masked_overlay).save(path_masked_map)
+    outputs['masked_overlay'] = path_masked_map
+    print(f"  Saved: {path_masked_map}")
+
+    # Step 4: heightmap before interpolation (with holes)
+    path_raw = os.path.join(output_dir, f"{base_name}_04_heightmap_raw.png")
+    save_heightmap(np.nan_to_num(heightmap, nan=ELEVATION_MIN), path_raw, bits=8)
+    outputs['heightmap_raw'] = path_raw
+    print(f"  Saved: {path_raw}")
+
+    # Step 5: heightmap after interpolation, before smoothing
+    path_filled = os.path.join(output_dir, f"{base_name}_05_heightmap_filled.png")
+    save_heightmap(heightmap_filled, path_filled, bits=8)
+    outputs['heightmap_filled'] = path_filled
+    print(f"  Saved: {path_filled}")
+
+    # Step 6: final heightmap (16-bit)
+    path_16bit = os.path.join(output_dir, f"{base_name}_06_heightmap_16bit.png")
     save_heightmap(heightmap_final, path_16bit, bits=16)
     outputs['heightmap_16bit'] = path_16bit
     print(f"  Saved: {path_16bit}")
-    
-    path_8bit = os.path.join(output_dir, f"{base_name}_heightmap_8bit.png")
+
+    # Step 6: final heightmap (8-bit preview)
+    path_8bit = os.path.join(output_dir, f"{base_name}_06_heightmap_8bit.png")
     save_heightmap(heightmap_final, path_8bit, bits=8)
     outputs['heightmap_8bit'] = path_8bit
     print(f"  Saved: {path_8bit}")
-    
-    path_viz = os.path.join(output_dir, f"{base_name}_visualization.png")
+
+    # Step 7: visualization
+    path_viz = os.path.join(output_dir, f"{base_name}_07_visualization.png")
     create_visualization(map_region, heightmap_final, mask, path_viz)
     outputs['visualization'] = path_viz
     print(f"  Saved: {path_viz}")
@@ -319,29 +395,53 @@ Examples:
     %(prog)s map.png
     %(prog)s map.png --output-dir ./output
     %(prog)s map.png --smoothing 5.0 --margins 60,50,0,400
+    %(prog)s map.png --colormap my_colormap.json
+
+Colormap JSON format:
+    {
+      "elevation_colors": [
+        {"rgb": [255, 251, 250], "elevation": 4500},
+        {"rgb": [151, 190, 125], "elevation": 100}
+      ],
+      "mask_colors": [
+        {"rgb": [255, 255, 255], "description": "white background"},
+        {"rgb": [0, 0, 0], "description": "black text"}
+      ]
+    }
 
 Notes:
     - The color LUT is configured for standard hypsometric coloring
-    - You may need to sample colors from your specific map and adjust the LUT
+    - Use --colormap to load custom colors from a JSON file
     - Use --margins to crop borders, legends, and non-map areas
         """
     )
     parser.add_argument('input', help='Input map image (PNG, JPG, etc.)')
-    parser.add_argument('--output-dir', '-o', default='.', help='Output directory')
+    parser.add_argument('--output-dir', '-o', default='output', help='Output directory (default: output)')
     parser.add_argument('--smoothing', '-s', type=float, default=SMOOTHING_SIGMA,
                         help=f'Gaussian smoothing sigma (default: {SMOOTHING_SIGMA}, 0 to disable)')
     parser.add_argument('--margins', '-m', type=str, default=None,
                         help='Crop margins as top,bottom,left,right (e.g., 60,50,0,400)')
-    
+    parser.add_argument('--colormap', '-c', type=str, default='cmap.json',
+                        help='JSON file with custom elevation and mask colors (default: cmap.json)')
+
     args = parser.parse_args()
-    
+
     margins = None
     if args.margins:
         parts = [int(x) for x in args.margins.split(',')]
         if len(parts) == 4:
             margins = {'top': parts[0], 'bottom': parts[1], 'left': parts[2], 'right': parts[3]}
-    
-    process_map(args.input, args.output_dir, margins, args.smoothing)
+
+    elevation_colors = None
+    mask_colors = None
+    if args.colormap and os.path.exists(args.colormap):
+        print(f"Loading colormap: {args.colormap}")
+        elevation_colors, mask_colors = load_colormap(args.colormap)
+    elif args.colormap and args.colormap != 'cmap.json':
+        print(f"Warning: colormap file '{args.colormap}' not found, using defaults")
+
+    process_map(args.input, args.output_dir, margins, args.smoothing,
+                elevation_colors, mask_colors)
 
 
 if __name__ == '__main__':
