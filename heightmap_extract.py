@@ -23,6 +23,7 @@ your specific map and update the LUT accordingly.
 import argparse
 import json
 import os
+import struct
 import numpy as np
 from PIL import Image
 from scipy.spatial import KDTree
@@ -31,73 +32,7 @@ from scipy.ndimage import gaussian_filter
 import matplotlib.pyplot as plt
 
 
-# ============================================================================
-# COLOR LOOKUP TABLE (LUT) CONFIGURATION
-# ============================================================================
-# Standard hypsometric coloring scheme. Adjust RGB values based on your map.
-# Format: ([R, G, B], elevation_in_meters)
-
-ELEVATION_COLORS = [
-    # Ocean / bathymetry (blue tones)
-    ([150, 193, 228], -200),
-    ([130, 180, 215], -500),
-    ([110, 165, 200], -1000),
-    ([90, 150, 185], -2000),
-    ([70, 130, 170], -3000),
-    
-    # Coastal lowlands (green tones)
-    ([145, 187, 113], 50),
-    ([150, 181, 124], 100),
-    ([149, 184, 104], 150),
-    ([143, 167, 109], 200),
-    ([153, 179, 114], 250),
-    
-    # Transitional (yellow-green)
-    ([170, 195, 120], 300),
-    ([180, 205, 125], 400),
-    ([187, 209, 127], 500),
-    ([189, 212, 132], 600),
-    ([184, 214, 154], 700),
-    
-    # Hills (tan/yellow tones)
-    ([200, 200, 140], 800),
-    ([210, 195, 145], 1000),
-    ([215, 190, 150], 1200),
-    ([220, 185, 140], 1500),
-    
-    # Mountains (brown tones)
-    ([200, 170, 130], 1800),
-    ([185, 155, 115], 2000),
-    ([170, 140, 100], 2500),
-    ([155, 125, 95], 3000),
-    
-    # High peaks (gray/white)
-    ([180, 175, 170], 3500),
-    ([200, 195, 190], 4000),
-    ([220, 215, 212], 4500),
-    ([240, 238, 235], 5000),
-    
-    # Rivers/water bodies within terrain
-    ([77, 112, 142], 100),
-]
-
-# Colors to mask (non-terrain: text, borders, legends, background)
-MASK_COLORS = [
-    [255, 255, 255],  # Pure white (background/text halo)
-    [254, 254, 254],  # Near-white
-    [253, 253, 253],
-    [255, 253, 254],
-    [0, 0, 0],        # Black (text)
-    [50, 50, 50],     # Dark gray (text)
-    [100, 100, 100],  # Gray (text)
-    [180, 30, 30],    # Red (borders)
-    [200, 50, 50],
-    [220, 70, 70],
-    [190, 40, 40],
-]
-
 # Processing parameters
-MASK_THRESHOLD = 30       # Color distance threshold for masking
 SMOOTHING_SIGMA = 3.0     # Gaussian smoothing sigma
 ELEVATION_MIN = -5000     # Default minimum elevation for normalization
 ELEVATION_MAX = 6000      # Default maximum elevation for normalization
@@ -145,79 +80,6 @@ def load_image(path):
     img = Image.open(path)
     return np.array(img)
 
-
-def build_color_trees(elevation_colors, mask_colors):
-    """Build KD-trees for fast color lookup."""
-    lut_colors = np.array([c[0] for c in elevation_colors])
-    lut_elevations = np.array([c[1] for c in elevation_colors])
-    mask_rgb = np.array(mask_colors)
-    
-    color_tree = KDTree(lut_colors)
-    mask_tree = KDTree(mask_rgb)
-    
-    return color_tree, mask_tree, lut_elevations
-
-
-def extract_map_region(img_array, margins=None):
-    """
-    Extract the map region, excluding borders and legends.
-    
-    Args:
-        img_array: Input image as numpy array
-        margins: Dict with keys 'top', 'bottom', 'left', 'right' specifying pixels to crop
-                 If None, uses automatic detection (not implemented) or defaults
-    
-    Returns:
-        Cropped map region
-    """
-    if margins is None:
-        # Default: no cropping
-        margins = {
-            'top': 0,
-            'bottom': 0,
-            'left': 0,
-            'right': 0
-        }
-    
-    h, w = img_array.shape[:2]
-    return img_array[
-        margins['top']:h - margins['bottom'],
-        margins['left']:w - margins['right']
-    ]
-
-
-def colors_to_elevation(map_region, color_tree, mask_tree, lut_elevations,
-                        mask_threshold=MASK_THRESHOLD):
-    """
-    Convert map colors to elevation values.
-
-    Returns:
-        heightmap: 2D array of elevation values (NaN where masked)
-        mask: 2D boolean array indicating masked pixels
-    """
-    h, w, c = map_region.shape
-    # Handle RGBA images by taking only RGB channels
-    if c == 4:
-        map_region = map_region[:, :, :3]
-    pixels = map_region.reshape(-1, 3)
-    
-    # Find nearest elevation color for each pixel
-    distances, indices = color_tree.query(pixels)
-    
-    # Find distance to nearest mask color
-    mask_distances, _ = mask_tree.query(pixels)
-    
-    # Create mask: pixels closer to mask colors than terrain colors
-    mask = mask_distances < np.minimum(distances, mask_threshold)
-    
-    # Map to elevations
-    pixel_elevations = lut_elevations[indices].astype(float)
-    pixel_elevations[mask] = np.nan
-    
-    heightmap = pixel_elevations.reshape(h, w)
-    mask_2d = mask.reshape(h, w)
-    
-    return heightmap, mask_2d
 
 
 def interpolate_masked_regions(heightmap):
@@ -406,6 +268,88 @@ def save_heightmap(heightmap, output_path, bits=16, elev_min=ELEVATION_MIN, elev
     img.save(output_path)
 
 
+# ============================================================================
+# MESH GENERATION FUNCTIONS
+# ============================================================================
+
+def create_mesh(heightmap, scale=(1.0, 1.0, 1.0), decimate=1):
+    """
+    Create 3D mesh vertices and faces from heightmap.
+
+    Args:
+        heightmap: 2D numpy array of height values (0-1 normalized)
+        scale: (x, y, z) scale factors
+        decimate: Decimation factor (1 = full res, 2 = half, etc.)
+
+    Returns:
+        vertices: Nx3 array of vertex positions
+        faces: Mx3 array of triangle indices
+    """
+    # Flip Y-axis: image Y=0 is top, but 3D Y=0 is bottom
+    heightmap = np.flipud(heightmap)
+
+    # Decimate if requested
+    if decimate > 1:
+        heightmap = heightmap[::decimate, ::decimate]
+
+    h, w = heightmap.shape
+    scale_x, scale_y, scale_z = scale
+
+    # Create vertex grid
+    x = np.linspace(-0.5, 0.5, w) * scale_x
+    y = np.linspace(-0.5, 0.5, h) * scale_y
+    xx, yy = np.meshgrid(x, y)
+
+    # Z is height value scaled
+    zz = heightmap * scale_z
+
+    # Flatten to vertex list
+    vertices = np.stack([xx.ravel(), yy.ravel(), zz.ravel()], axis=1)
+
+    # Create triangle faces
+    faces = []
+    for row in range(h - 1):
+        for col in range(w - 1):
+            v0 = row * w + col
+            v1 = row * w + col + 1
+            v2 = (row + 1) * w + col
+            v3 = (row + 1) * w + col + 1
+            faces.append([v0, v2, v1])
+            faces.append([v1, v2, v3])
+
+    return vertices, np.array(faces, dtype=np.int32)
+
+
+def save_obj(path, vertices, faces):
+    """Save mesh in Wavefront OBJ format."""
+    with open(path, 'w') as f:
+        f.write("# Heightmap mesh\n")
+        for v in vertices:
+            f.write(f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}\n")
+        f.write("\n")
+        for face in faces:
+            f.write(f"f {face[0]+1} {face[1]+1} {face[2]+1}\n")
+
+
+def save_stl_binary(path, vertices, faces):
+    """Save mesh in binary STL format."""
+    with open(path, 'wb') as f:
+        f.write(b'\0' * 80)  # Header
+        f.write(struct.pack('<I', len(faces)))
+        for face in faces:
+            v0, v1, v2 = vertices[face]
+            edge1, edge2 = v1 - v0, v2 - v0
+            normal = np.cross(edge1, edge2)
+            norm = np.linalg.norm(normal)
+            if norm > 0:
+                normal /= norm
+            f.write(struct.pack('<3f', *normal))
+            f.write(struct.pack('<3f', *v0))
+            f.write(struct.pack('<3f', *v1))
+            f.write(struct.pack('<3f', *v2))
+            f.write(struct.pack('<H', 0))
+
+
 def create_visualization(map_region, heightmap, mask, output_path,
                          elev_min=ELEVATION_MIN, elev_max=ELEVATION_MAX):
     """Create visualization of the extraction process."""
@@ -438,42 +382,38 @@ def create_visualization(map_region, heightmap, mask, output_path,
     plt.close()
 
 
-def process_map(input_path, output_dir='.', margins=None, smoothing=SMOOTHING_SIGMA,
-                elevation_colors=None, mask_colors=None, elev_min=None, elev_max=None,
-                elev_artifact_threshold=300.0, dilate_iterations=3, save_river_mask=False):
+def process_map(input_path, output_dir='.', smoothing=SMOOTHING_SIGMA,
+                elevation_colors=None, elev_min=None, elev_max=None,
+                elev_artifact_threshold=300.0, dilate_iterations=3,
+                mesh_scale=(100.0, 100.0, 20.0), mesh_decimate=4):
     """
     Main processing pipeline with hybrid mask detection.
 
     Pipeline:
-    1. Load image, crop margins
+    1. Load image
     2. Color → Elevation mapping
     3. RGB-space mask detection (red borders, white/black text, gray)
     4. River detection (separate layer, not masked)
     5. Elevation-space artifact detection (local std threshold)
     6. Combine masks + morphological cleanup (dilation)
     7. Interpolate masked regions
-    8. Smooth and save
+    8. Smooth, save, and generate 3D meshes
 
     Args:
         input_path: Path to input map image
         output_dir: Directory for output files
-        margins: Optional crop margins dict
         smoothing: Gaussian smoothing sigma (0 to disable)
-        elevation_colors: List of (rgb, elevation) tuples, or None for defaults
-        mask_colors: List of rgb values to mask, or None for defaults
-        elev_min: Minimum elevation for normalization, or None for default
-        elev_max: Maximum elevation for normalization, or None for default
+        elevation_colors: List of (rgb, elevation) tuples (required)
+        elev_min: Minimum elevation for normalization
+        elev_max: Maximum elevation for normalization
         elev_artifact_threshold: Elevation std threshold for artifact detection
         dilate_iterations: Mask dilation iterations for cleanup
-        save_river_mask: Whether to save detected rivers as separate image
+        mesh_scale: (x, y, z) scale for mesh generation
+        mesh_decimate: Decimation factor for mesh (1=full, 4=quarter res)
 
     Returns:
         Dict with paths to output files
     """
-    if elevation_colors is None:
-        elevation_colors = ELEVATION_COLORS
-    if mask_colors is None:
-        mask_colors = MASK_COLORS
     if elev_min is None:
         elev_min = ELEVATION_MIN
     if elev_max is None:
@@ -482,14 +422,10 @@ def process_map(input_path, output_dir='.', margins=None, smoothing=SMOOTHING_SI
     os.makedirs(output_dir, exist_ok=True)
     base_name = os.path.splitext(os.path.basename(input_path))[0]
 
-    # Step 1: Load and crop
+    # Step 1: Load image
     print(f"Loading image: {input_path}")
-    img_array = load_image(input_path)
-    print(f"  Shape: {img_array.shape}, dtype: {img_array.dtype}")
-
-    print("Extracting map region...")
-    map_region = extract_map_region(img_array, margins)
-    print(f"  Region shape: {map_region.shape}")
+    map_region = load_image(input_path)
+    print(f"  Shape: {map_region.shape}, dtype: {map_region.dtype}")
 
     # Step 2: Color → Elevation (without masking)
     print("Building color lookup tables...")
@@ -542,11 +478,11 @@ def process_map(input_path, output_dir='.', margins=None, smoothing=SMOOTHING_SI
     # Save outputs
     outputs = {}
 
-    # 01: cropped map region
-    path_cropped = os.path.join(output_dir, f"{base_name}_01_cropped.png")
-    Image.fromarray(map_region).save(path_cropped)
-    outputs['cropped'] = path_cropped
-    print(f"  Saved: {path_cropped}")
+    # 01: input image
+    path_input = os.path.join(output_dir, f"{base_name}_01_input.png")
+    Image.fromarray(map_region).save(path_input)
+    outputs['input'] = path_input
+    print(f"  Saved: {path_input}")
 
     # 02: RGB-space mask
     path_mask_rgb = os.path.join(output_dir, f"{base_name}_02_mask_rgb.png")
@@ -566,15 +502,11 @@ def process_map(input_path, output_dir='.', margins=None, smoothing=SMOOTHING_SI
     outputs['mask_combined'] = path_mask_combined
     print(f"  Saved: {path_mask_combined}")
 
-    # 05: Rivers detected (optional, always generate for reference)
+    # 05: Rivers detected (grayscale mask)
     path_rivers = os.path.join(output_dir, f"{base_name}_05_rivers_detected.png")
-    if save_river_mask or True:  # Always save for now
-        map_rgb = map_region[:, :, :3] if map_region.shape[2] == 4 else map_region
-        rivers_overlay = map_rgb.copy()
-        rivers_overlay[rivers] = [0, 255, 255]  # Cyan for rivers
-        Image.fromarray(rivers_overlay).save(path_rivers)
-        outputs['rivers'] = path_rivers
-        print(f"  Saved: {path_rivers}")
+    Image.fromarray((rivers * 255).astype(np.uint8), mode='L').save(path_rivers)
+    outputs['rivers'] = path_rivers
+    print(f"  Saved: {path_rivers}")
 
     # 06: heightmap before interpolation (with holes shown as black)
     path_raw = os.path.join(output_dir, f"{base_name}_06_heightmap_raw.png")
@@ -610,6 +542,30 @@ def process_map(input_path, output_dir='.', margins=None, smoothing=SMOOTHING_SI
     outputs['visualization'] = path_viz
     print(f"  Saved: {path_viz}")
 
+    # 10: 3D mesh generation
+    print(f"Generating 3D mesh (scale={mesh_scale}, decimate={mesh_decimate})...")
+
+    # Normalize heightmap to 0-1 for mesh generation
+    hm_normalized = (heightmap_final - elev_min) / (elev_max - elev_min)
+    hm_normalized = np.clip(hm_normalized, 0, 1)
+
+    vertices, faces = create_mesh(hm_normalized, scale=mesh_scale, decimate=mesh_decimate)
+    print(f"  Vertices: {len(vertices):,}, Triangles: {len(faces):,}")
+
+    # Save OBJ
+    path_obj = os.path.join(output_dir, f"{base_name}_10_terrain.obj")
+    save_obj(path_obj, vertices, faces)
+    outputs['mesh_obj'] = path_obj
+    size_mb = os.path.getsize(path_obj) / (1024 * 1024)
+    print(f"  Saved: {path_obj} ({size_mb:.1f} MB)")
+
+    # Save STL
+    path_stl = os.path.join(output_dir, f"{base_name}_10_terrain.stl")
+    save_stl_binary(path_stl, vertices, faces)
+    outputs['mesh_stl'] = path_stl
+    size_mb = os.path.getsize(path_stl) / (1024 * 1024)
+    print(f"  Saved: {path_stl} ({size_mb:.1f} MB)")
+
     print("Done!")
     return outputs
 
@@ -622,7 +578,6 @@ def main():
 Examples:
     %(prog)s map.png
     %(prog)s map.png --output-dir ./output
-    %(prog)s map.png --smoothing 5.0 --margins 60,50,0,400
     %(prog)s map.png --colormap my_colormap.json
     %(prog)s map.png --elev-artifact-threshold 300 --dilate-iterations 3
 
@@ -633,19 +588,19 @@ Hybrid Mask Detection Pipeline:
     4. River detection: saved separately for future handling
 
 Output files (numbered by pipeline step):
-    01_cropped.png         - Input after margin cropping
+    01_input.png           - Input image
     02_mask_rgb.png        - RGB-space detected mask
     03_mask_elevation.png  - Elevation artifact mask
     04_mask_combined.png   - Combined + dilated mask
-    05_rivers_detected.png - River detection overlay
+    05_rivers_detected.png - River detection (grayscale)
     06_heightmap_raw.png   - Before interpolation (with holes)
     07_heightmap_filled.png - After interpolation
     08_heightmap_*.png     - Final smoothed (8-bit and 16-bit)
     09_visualization.png   - Debug visualization
+    10_terrain.obj/.stl    - 3D mesh files
 
 Notes:
-    - Use --colormap to load custom colors from a JSON file
-    - Use --margins to crop borders, legends, and non-map areas
+    - Requires cmap.json colormap file (or specify with --colormap)
     - Tune --elev-artifact-threshold based on your map (higher = less masking)
     - Tune --dilate-iterations for anti-aliasing cleanup (0 to disable)
         """
@@ -655,40 +610,39 @@ Notes:
                         help='Output directory (default: output)')
     parser.add_argument('--smoothing', '-s', type=float, default=SMOOTHING_SIGMA,
                         help=f'Gaussian smoothing sigma (default: {SMOOTHING_SIGMA}, 0 to disable)')
-    parser.add_argument('--margins', '-m', type=str, default=None,
-                        help='Crop margins as top,bottom,left,right (e.g., 60,50,0,400)')
     parser.add_argument('--colormap', '-c', type=str, default='cmap.json',
-                        help='JSON file with custom elevation and mask colors (default: cmap.json)')
+                        help='JSON file with elevation colors (default: cmap.json)')
     parser.add_argument('--elev-artifact-threshold', type=float, default=300.0,
                         help='Elevation std threshold for artifact detection (default: 300)')
     parser.add_argument('--dilate-iterations', type=int, default=3,
                         help='Mask dilation iterations for cleanup (default: 3, 0 to disable)')
-    parser.add_argument('--save-river-mask', action='store_true',
-                        help='Save detected rivers as separate image')
+    parser.add_argument('--mesh-scale', type=str, default='100,100,20',
+                        help='Mesh scale as X,Y,Z (default: 100,100,20)')
+    parser.add_argument('--mesh-decimate', type=int, default=4,
+                        help='Mesh decimation factor (default: 4, 1=full res)')
 
     args = parser.parse_args()
 
-    margins = None
-    if args.margins:
-        parts = [int(x) for x in args.margins.split(',')]
-        if len(parts) == 4:
-            margins = {'top': parts[0], 'bottom': parts[1], 'left': parts[2], 'right': parts[3]}
+    # Parse mesh scale
+    mesh_scale = tuple(float(x) for x in args.mesh_scale.split(','))
+    if len(mesh_scale) != 3:
+        print("Error: --mesh-scale must be X,Y,Z (e.g., 100,100,20)")
+        return 1
 
-    elevation_colors = None
-    mask_colors = None
-    elev_min = None
-    elev_max = None
-    if args.colormap and os.path.exists(args.colormap):
-        print(f"Loading colormap: {args.colormap}")
-        elevation_colors, mask_colors, elev_min, elev_max = load_colormap(args.colormap)
-        print(f"  Elevation range: {elev_min}m to {elev_max}m")
-    elif args.colormap and args.colormap != 'cmap.json':
-        print(f"Warning: colormap file '{args.colormap}' not found, using defaults")
+    # Load colormap (required)
+    if not os.path.exists(args.colormap):
+        print(f"Error: colormap file '{args.colormap}' not found")
+        print("Create a cmap.json file or specify one with --colormap")
+        return 1
 
-    process_map(args.input, args.output_dir, margins, args.smoothing,
-                elevation_colors, mask_colors, elev_min, elev_max,
+    print(f"Loading colormap: {args.colormap}")
+    elevation_colors, mask_colors, elev_min, elev_max = load_colormap(args.colormap)
+    print(f"  Elevation range: {elev_min}m to {elev_max}m")
+
+    process_map(args.input, args.output_dir, args.smoothing,
+                elevation_colors, elev_min, elev_max,
                 args.elev_artifact_threshold, args.dilate_iterations,
-                args.save_river_mask)
+                mesh_scale, args.mesh_decimate)
 
 
 if __name__ == '__main__':
