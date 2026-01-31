@@ -21,7 +21,7 @@
     {"rgb": [254, 254, 254], "description": "near-white"},
     {"rgb": [0, 0, 0], "description": "black text"},
     {"rgb": [50, 50, 50], "description": "dark gray text"},
-    {"rgb": [180, 30, 30], "description": "red border"},
-    {"rgb": [200, 50, 50], "description": "red border variant"}
+    {"rgb": [255, 38, 40], "description": "red border"},
+    {"rgb": [198, 154, 95], "description": "red border variant"}
   ]
 }
