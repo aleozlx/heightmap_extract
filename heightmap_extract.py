@@ -33,7 +33,7 @@ import matplotlib.pyplot as plt
 
 
 # Processing parameters
-SMOOTHING_SIGMA = 3.0     # Gaussian smoothing sigma
+SMOOTHING_SIGMA = 5.0     # Gaussian smoothing sigma
 ELEVATION_MIN = -5000     # Default minimum elevation for normalization
 ELEVATION_MAX = 6000      # Default maximum elevation for normalization
 
@@ -69,20 +69,18 @@ def load_colormap(path):
         ...
       ],
       "mask_colors": [
-        {"color": "#FFFFFF", "tolerance": 15, "description": "white"},
-        {"color": "#FF2628", "tolerance": 40, "description": "red border"},
+        {"color": "#FFFFFF", "tolerance": 15, "id": "white"},
+        {"color": "#FF2628", "tolerance": 40, "id": "red_border"},
+        {"color": "#C69A5F", "tolerance": 30, "id": "red_trans", "next_to": ["red_border"]},
         ...
       ],
-      "water_colors": {
-        "river": {"color": "#1993B9", "tolerance": 30},
-        "lake": {"color": "#EEF5FC", "tolerance": 15}
-      }
+      "water_ids": ["river", "lake"]
     }
 
     Returns:
         elevation_colors: List of (rgb, elevation) tuples
-        mask_colors: List of dicts with rgb, tolerance, description
-        water_colors: Dict with 'river' and 'lake' entries (rgb, tolerance)
+        mask_colors: List of dicts with rgb, tolerance, id, next_to
+        water_ids: List of mask color ids that are water layers
         elev_min: Minimum elevation in colormap
         elev_max: Maximum elevation in colormap
     """
@@ -91,29 +89,24 @@ def load_colormap(path):
 
     elevation_colors = [(parse_color(item), item['elevation']) for item in data['elevation_colors']]
 
-    # Parse mask colors with tolerance
+    # Parse mask colors with id and optional next_to
     mask_colors = []
     for item in data.get('mask_colors', []):
         mask_colors.append({
             'rgb': np.array(parse_color(item)),
             'tolerance': item.get('tolerance', 30),
-            'description': item.get('description', '')
+            'id': item.get('id', ''),
+            'next_to': item.get('next_to', None)  # List of anchor ids or None
         })
 
-    # Parse water colors (river, lake)
-    water_colors = {}
-    if 'water_colors' in data:
-        for key, val in data['water_colors'].items():
-            water_colors[key] = {
-                'rgb': np.array(parse_color(val)),
-                'tolerance': val.get('tolerance', 30)
-            }
+    # Water layer ids (for separate output)
+    water_ids = data.get('water_ids', [])
 
     elevations = [item['elevation'] for item in data['elevation_colors']]
     elev_min = min(elevations)
     elev_max = max(elevations)
 
-    return elevation_colors, mask_colors, water_colors, elev_min, elev_max
+    return elevation_colors, mask_colors, water_ids, elev_min, elev_max
 
 
 def load_image(path):
@@ -136,92 +129,93 @@ def interpolate_masked_regions(heightmap):
 # HYBRID MASK DETECTION FUNCTIONS
 # ============================================================================
 
-def detect_mask_colors(image, mask_colors):
+def detect_mask_colors(image, mask_colors, dilation_radius=15):
     """
     Detect non-terrain pixels by matching colors from cmap.json.
 
-    Uses Euclidean distance in RGB space with per-color tolerance.
+    Supports conditional masking via 'next_to' field - colors are only
+    masked if they're adjacent to specified anchor colors.
 
     Args:
         image: RGB or RGBA image as numpy array
-        mask_colors: List of dicts with 'rgb' (array) and 'tolerance' (float)
+        mask_colors: List of dicts with 'rgb', 'tolerance', 'id', 'next_to'
+        dilation_radius: Pixels radius for next_to adjacency check
 
     Returns:
-        Boolean mask (True = mask this pixel)
+        combined_mask: Boolean mask (True = mask this pixel)
+        masks_by_id: Dict mapping id to individual boolean mask
     """
+    from scipy.ndimage import binary_dilation
+
     # Handle RGBA
     if image.shape[2] == 4:
         image = image[:, :, :3]
 
     rgb = image.astype(np.float32)
-    mask = np.zeros(image.shape[:2], dtype=bool)
+    shape = image.shape[:2]
 
     if not mask_colors:
-        return mask
+        return np.zeros(shape, dtype=bool), {}
+
+    # First pass: detect all colors, store by id
+    masks_by_id = {}
+    unconditional = []  # (id, mask) for colors without next_to
+    conditional = []     # (id, mask, next_to) for colors with next_to
 
     for entry in mask_colors:
         target_rgb = entry['rgb'].astype(np.float32)
         tolerance = entry['tolerance']
-
-        # Euclidean distance in RGB space
-        dist = np.sqrt(np.sum((rgb - target_rgb) ** 2, axis=2))
-        color_match = dist < tolerance
-        mask |= color_match
-
-        count = np.sum(color_match)
-        if count > 0:
-            desc = entry.get('description', 'unnamed')
-            print(f"    {desc}: {count:,} pixels")
-
-    return mask
-
-
-def detect_rivers(image, elevation, water_colors):
-    """
-    Detect river and lake pixels by color matching.
-
-    Uses specific colors from colormap with tolerance for anti-aliasing.
-    Checks if pixel is on land by looking at neighboring pixels' elevation.
-
-    Args:
-        image: RGB or RGBA image as numpy array
-        elevation: 2D array of elevation values
-        water_colors: Dict with 'river' and/or 'lake' entries containing rgb and tolerance
-
-    Returns:
-        Boolean mask for water pixels (rivers and lakes on land)
-    """
-    # Handle RGBA
-    if image.shape[2] == 4:
-        image = image[:, :, :3]
-
-    rgb = image.astype(np.float32)
-    mask = np.zeros(image.shape[:2], dtype=bool)
-
-    if not water_colors:
-        return mask
-
-    # Check if surrounded by land using max filter on elevation
-    # A pixel is "on land" if nearby pixels have positive elevation
-    land_nearby = ndimage.maximum_filter(elevation, size=7) > 50
-
-    for water_type, info in water_colors.items():
-        target_rgb = info['rgb'].astype(np.float32)
-        tolerance = info['tolerance']
+        color_id = entry['id']
+        next_to = entry.get('next_to')
 
         # Euclidean distance in RGB space
         dist = np.sqrt(np.sum((rgb - target_rgb) ** 2, axis=2))
         color_match = dist < tolerance
 
-        # Rivers/lakes must be surrounded by land
-        water_mask = color_match & land_nearby
-        mask |= water_mask
+        masks_by_id[color_id] = color_match
 
-        count = np.sum(water_mask)
+        if next_to:
+            conditional.append((color_id, color_match, next_to))
+        else:
+            unconditional.append((color_id, color_match))
+
+    # Build combined anchor mask for each unique anchor id
+    # (dilated version for adjacency checking)
+    anchor_masks_dilated = {}
+    for color_id, mask in unconditional:
+        if mask.any():
+            dilated = binary_dilation(mask, iterations=dilation_radius)
+            anchor_masks_dilated[color_id] = dilated
+
+    # Second pass: apply next_to constraints
+    combined_mask = np.zeros(shape, dtype=bool)
+
+    # Add unconditional masks
+    for color_id, mask in unconditional:
+        count = np.sum(mask)
         if count > 0:
-            print(f"  {water_type}: {count:,} pixels")
+            print(f"    {color_id}: {count:,} pixels")
+        combined_mask |= mask
 
-    return mask
+    # Add conditional masks (only where adjacent to anchors)
+    for color_id, mask, next_to in conditional:
+        # Build adjacency mask from all referenced anchors
+        adjacency = np.zeros(shape, dtype=bool)
+        for anchor_id in next_to:
+            if anchor_id in anchor_masks_dilated:
+                adjacency |= anchor_masks_dilated[anchor_id]
+
+        # Only keep pixels that match color AND are near anchors
+        filtered_mask = mask & adjacency
+        masks_by_id[color_id] = filtered_mask  # Update with filtered version
+
+        count_original = np.sum(mask)
+        count_filtered = np.sum(filtered_mask)
+        if count_original > 0:
+            print(f"    {color_id}: {count_filtered:,} pixels (filtered from {count_original:,})")
+        combined_mask |= filtered_mask
+
+    return combined_mask, masks_by_id
 
 
 def detect_color_artifacts(color_distances, threshold=30.0):
@@ -295,7 +289,7 @@ def colors_to_elevation(map_region, color_tree, lut_elevations):
 def save_heightmap(heightmap, output_path, bits=16, elev_min=ELEVATION_MIN, elev_max=ELEVATION_MAX):
     """
     Save heightmap as PNG with specified bit depth.
-    
+
     Args:
         heightmap: 2D array of elevation values
         output_path: Output file path
@@ -306,14 +300,14 @@ def save_heightmap(heightmap, output_path, bits=16, elev_min=ELEVATION_MIN, elev
     # Normalize to 0-1 range
     normalized = (heightmap - elev_min) / (elev_max - elev_min)
     normalized = np.clip(normalized, 0, 1)
-    
+
     if bits == 16:
         data = (normalized * 65535).astype(np.uint16)
         img = Image.fromarray(data)
     else:
         data = (normalized * 255).astype(np.uint8)
         img = Image.fromarray(data, mode='L')
-    
+
     img.save(output_path)
 
 
@@ -434,7 +428,7 @@ def create_visualization(map_region, heightmap, mask, output_path,
 def process_map(input_path, output_dir='.', smoothing=SMOOTHING_SIGMA,
                 elevation_colors=None, mask_colors=None,
                 elev_min=None, elev_max=None,
-                water_colors=None,
+                water_ids=None,
                 color_artifact_threshold=30.0, dilate_iterations=3,
                 mesh_scale=(100.0, 100.0, 20.0), mesh_decimate=4):
     """
@@ -443,21 +437,21 @@ def process_map(input_path, output_dir='.', smoothing=SMOOTHING_SIGMA,
     Pipeline:
     1. Load image
     2. Color → Elevation mapping
-    3. Mask color detection (from cmap.json mask_colors)
-    4. River detection (separate layer, not masked)
-    5. Color-space artifact detection (distance to palette)
-    6. Combine masks + morphological cleanup (dilation)
-    7. Interpolate masked regions
-    8. Smooth, save, and generate 3D meshes
+    3. Mask color detection (with conditional next_to logic)
+    4. Color-space artifact detection (distance to palette)
+    5. Combine masks + morphological cleanup (dilation)
+    6. Interpolate masked regions
+    7. Smooth, save, and generate 3D meshes
 
     Args:
         input_path: Path to input map image
         output_dir: Directory for output files
         smoothing: Gaussian smoothing sigma (0 to disable)
         elevation_colors: List of (rgb, elevation) tuples (required)
-        mask_colors: List of colors to mask (from cmap.json)
+        mask_colors: List of mask color entries (from cmap.json)
         elev_min: Minimum elevation for normalization
         elev_max: Maximum elevation for normalization
+        water_ids: List of mask color ids that are water layers
         color_artifact_threshold: RGB distance threshold for artifact detection
         dilate_iterations: Mask dilation iterations for cleanup
         mesh_scale: (x, y, z) scale for mesh generation
@@ -491,22 +485,26 @@ def process_map(input_path, output_dir='.', smoothing=SMOOTHING_SIGMA,
     print(f"  Raw elevation range: {heightmap_raw.min():.0f}m to {heightmap_raw.max():.0f}m")
     print(f"  Color distance range: {color_distances.min():.1f} to {color_distances.max():.1f}")
 
-    # Step 3: Mask color detection (from cmap.json)
+    # Step 3: Mask color detection (with conditional next_to logic)
     print("Detecting mask colors...")
-    mask_explicit = detect_mask_colors(map_region, mask_colors or [])
-    print(f"  Mask colors: {mask_explicit.sum()} pixels ({100*mask_explicit.mean():.1f}%)")
+    mask_explicit, masks_by_id = detect_mask_colors(map_region, mask_colors or [])
+    print(f"  Mask colors total: {mask_explicit.sum()} pixels ({100*mask_explicit.mean():.1f}%)")
 
-    # Step 4: River detection (separate layer)
-    print("Detecting rivers/lakes...")
-    rivers = detect_rivers(map_region, heightmap_raw, water_colors or {})
-    print(f"  Total water detected: {rivers.sum()} pixels ({100*rivers.mean():.1f}%)")
+    # Extract water layer (river + lake) for separate output
+    water_ids = water_ids or []
+    water_mask = np.zeros(map_region.shape[:2], dtype=bool)
+    for wid in water_ids:
+        if wid in masks_by_id:
+            water_mask |= masks_by_id[wid]
+    if water_mask.any():
+        print(f"  Water layer ({', '.join(water_ids)}): {water_mask.sum():,} pixels")
 
-    # Step 5: Color-space artifact detection (pixels far from palette)
+    # Step 4: Color-space artifact detection (pixels far from palette)
     print(f"Detecting color artifacts (threshold={color_artifact_threshold})...")
     mask_color = detect_color_artifacts(color_distances, threshold=color_artifact_threshold)
     print(f"  Color artifact mask: {mask_color.sum()} pixels ({100*mask_color.mean():.1f}%)")
 
-    # Step 6: Combine masks + morphological cleanup
+    # Step 5: Combine masks + morphological cleanup
     print(f"Combining masks and cleanup (dilate={dilate_iterations})...")
     mask_combined = combine_and_cleanup_mask(mask_explicit, mask_color, dilate_iterations)
     print(f"  Combined mask: {mask_combined.sum()} pixels ({100*mask_combined.mean():.1f}%)")
@@ -515,11 +513,11 @@ def process_map(input_path, output_dir='.', smoothing=SMOOTHING_SIGMA,
     heightmap = heightmap_raw.copy()
     heightmap[mask_combined] = np.nan
 
-    # Step 7: Interpolate masked regions
+    # Step 6: Interpolate masked regions
     print("Interpolating masked regions...")
     heightmap_filled = interpolate_masked_regions(heightmap)
 
-    # Step 8: Smooth
+    # Step 7: Smooth
     if smoothing > 0:
         print(f"Applying Gaussian smoothing (sigma={smoothing})...")
         heightmap_final = gaussian_filter(heightmap_filled, sigma=smoothing)
@@ -555,11 +553,11 @@ def process_map(input_path, output_dir='.', smoothing=SMOOTHING_SIGMA,
     outputs['mask_combined'] = path_mask_combined
     print(f"  Saved: {path_mask_combined}")
 
-    # 05: Rivers detected (grayscale mask)
-    path_rivers = os.path.join(output_dir, f"{base_name}_05_rivers_detected.png")
-    Image.fromarray((rivers * 255).astype(np.uint8), mode='L').save(path_rivers)
-    outputs['rivers'] = path_rivers
-    print(f"  Saved: {path_rivers}")
+    # 05: Water layer (river + lake)
+    path_water = os.path.join(output_dir, f"{base_name}_05_water.png")
+    Image.fromarray((water_mask * 255).astype(np.uint8), mode='L').save(path_water)
+    outputs['water'] = path_water
+    print(f"  Saved: {path_water}")
 
     # 06: heightmap before interpolation (with holes shown as black)
     path_raw = os.path.join(output_dir, f"{base_name}_06_heightmap_raw.png")
@@ -689,15 +687,15 @@ Notes:
         return 1
 
     print(f"Loading colormap: {args.colormap}")
-    elevation_colors, mask_colors, water_colors, elev_min, elev_max = load_colormap(args.colormap)
+    elevation_colors, mask_colors, water_ids, elev_min, elev_max = load_colormap(args.colormap)
     print(f"  Elevation range: {elev_min}m to {elev_max}m")
     if mask_colors:
         print(f"  Mask colors: {len(mask_colors)} entries")
-    if water_colors:
-        print(f"  Water colors: {', '.join(water_colors.keys())}")
+    if water_ids:
+        print(f"  Water layers: {', '.join(water_ids)}")
 
     process_map(args.input, args.output_dir, args.smoothing,
-                elevation_colors, mask_colors, elev_min, elev_max, water_colors,
+                elevation_colors, mask_colors, elev_min, elev_max, water_ids,
                 args.color_artifact_threshold, args.dilate_iterations,
                 mesh_scale, args.mesh_decimate)
 

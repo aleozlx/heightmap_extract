@@ -2,7 +2,7 @@
   "name": "hypsometric_standard",
   "description": "Standard hypsometric coloring extracted from map legend",
   "elevation_colors": [
-    {"color": "#B17E51", "elevation": 5500},
+    {"color": "#B17E51", "elevation": 6500},
     {"color": "#C8A063", "elevation": 5000},
     {"color": "#CFB472", "elevation": 3000},
     {"color": "#DECF92", "elevation": 2000},
@@ -17,16 +17,15 @@
     {"color": "#73ACDD", "elevation": -5000}
   ],
   "mask_colors": [
-    {"color": "#FFFFFF", "tolerance": 15, "description": "white background"},
-    {"color": "#000000", "tolerance": 50, "description": "black text"},
-    {"color": "#808080", "tolerance": 30, "description": "gray text"},
-    {"color": "#FF2628", "tolerance": 40, "description": "red1"},
-    {"color": "#C69A5F", "tolerance": 30, "description": "red2"},
-    {"color": "#A88B5A", "tolerance": 30, "description": "red3"},
-    {"color": "#E09A71", "tolerance": 30, "description": "red4"}
+    {"color": "#FFFFFF", "tolerance": 15, "id": "white"},
+    {"color": "#000000", "tolerance": 50, "id": "black"},
+    {"color": "#808080", "tolerance": 30, "id": "gray"},
+    {"color": "#FF2628", "tolerance": 40, "id": "red_border"},
+    {"color": "#1993B9", "tolerance": 30, "id": "river"},
+    {"color": "#EEF5FC", "tolerance": 15, "id": "lake"},
+    {"color": "#C69A5F", "tolerance": 30, "id": "red_trans1", "next_to": ["red_border", "river"]},
+    {"color": "#A88B5A", "tolerance": 30, "id": "red_trans2", "next_to": ["red_border", "river"]},
+    {"color": "#E09A71", "tolerance": 30, "id": "red_trans3", "next_to": ["red_border", "river"]}
   ],
-  "water_colors": {
-    "river": {"color": "#1993B9", "tolerance": 30},
-    "lake": {"color": "#EEF5FC", "tolerance": 15}
-  }
+  "water_ids": ["river", "lake"]
 }
