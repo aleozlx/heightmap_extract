@@ -18,10 +18,10 @@
   ],
   "mask_colors": [
     {"color": "#FFFFFF", "tolerance": 15, "id": "white"},
-    {"color": "#000000", "tolerance": 50, "id": "black"},
+    {"color": "#000000", "tolerance": 50, "id": "black", "indent": 45},
     {"color": "#808080", "tolerance": 30, "id": "gray"},
-    {"color": "#FF2628", "tolerance": 40, "id": "red_border"},
-    {"color": "#1993B9", "tolerance": 30, "id": "river"},
+    {"color": "#FF2628", "tolerance": 40, "id": "red_border", "indent": 60},
+    {"color": "#1993B9", "tolerance": 30, "id": "river", "indent": 45},
     {"color": "#EEF5FC", "tolerance": 15, "id": "lake"},
     {"color": "#C69A5F", "tolerance": 30, "id": "red_trans1", "next_to": ["red_border", "river"]},
     {"color": "#A88B5A", "tolerance": 30, "id": "red_trans2", "next_to": ["red_border", "river"]},

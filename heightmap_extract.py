@@ -89,14 +89,15 @@ def load_colormap(path):
 
     elevation_colors = [(parse_color(item), item['elevation']) for item in data['elevation_colors']]
 
-    # Parse mask colors with id and optional next_to
+    # Parse mask colors with id, optional next_to, and optional indent
     mask_colors = []
     for item in data.get('mask_colors', []):
         mask_colors.append({
             'rgb': np.array(parse_color(item)),
             'tolerance': item.get('tolerance', 30),
             'id': item.get('id', ''),
-            'next_to': item.get('next_to', None)  # List of anchor ids or None
+            'next_to': item.get('next_to', None),  # List of anchor ids or None
+            'indent': item.get('indent', 0)  # Depth in meters to carve into terrain
         })
 
     # Water layer ids (for separate output)
@@ -517,12 +518,35 @@ def process_map(input_path, output_dir='.', smoothing=SMOOTHING_SIGMA,
     print("Interpolating masked regions...")
     heightmap_filled = interpolate_masked_regions(heightmap)
 
-    # Step 7: Smooth
+    # Step 7: Smooth terrain (before indentations to preserve them)
     if smoothing > 0:
-        print(f"Applying Gaussian smoothing (sigma={smoothing})...")
-        heightmap_final = gaussian_filter(heightmap_filled, sigma=smoothing)
+        print(f"Applying terrain smoothing (sigma={smoothing})...")
+        heightmap_smoothed = gaussian_filter(heightmap_filled, sigma=smoothing)
     else:
-        heightmap_final = heightmap_filled
+        heightmap_smoothed = heightmap_filled
+
+    # Step 8: Apply indentations (carve features into smoothed terrain)
+    # Build indent map taking max indent per pixel to avoid double-dipping
+    indent_map = np.zeros(heightmap_smoothed.shape, dtype=np.float32)
+    indent_sources = []
+    for entry in (mask_colors or []):
+        indent = entry.get('indent', 0)
+        if indent > 0 and entry['id'] in masks_by_id:
+            indent_mask = masks_by_id[entry['id']]
+            if indent_mask.any():
+                # Take max indent at each pixel
+                indent_map = np.maximum(indent_map, indent_mask.astype(np.float32) * indent)
+                indent_sources.append(f"{entry['id']}:-{indent}m")
+
+    if indent_map.any():
+        indent_pixels = (indent_map > 0).sum()
+        print(f"  Indentations: {', '.join(indent_sources)} ({indent_pixels:,} pixels)")
+        # Light smoothing on indent map for beveled edges
+        indent_map_smooth = gaussian_filter(indent_map, sigma=1.0)
+        heightmap_final = heightmap_smoothed - indent_map_smooth
+    else:
+        print("  No indentations applied")
+        heightmap_final = heightmap_smoothed
 
     print(f"  Final range: {heightmap_final.min():.0f}m to {heightmap_final.max():.0f}m")
 
