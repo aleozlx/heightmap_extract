@@ -17,12 +17,13 @@
     {"rgb": [115, 172, 221], "elevation": -5000}
   ],
   "mask_colors": [
-    {"rgb": [255, 255, 255], "description": "white background"},
-    {"rgb": [254, 254, 254], "description": "near-white"},
-    {"rgb": [0, 0, 0], "description": "black text"},
-    {"rgb": [50, 50, 50], "description": "dark gray text"},
-    {"rgb": [255, 38, 40], "description": "red border"},
-    {"rgb": [198, 154, 95], "description": "red border variant"}
+    {"rgb": [255, 255, 255], "tolerance": 15, "description": "white background"},
+    {"rgb": [0, 0, 0], "tolerance": 50, "description": "black text"},
+    {"rgb": [128, 128, 128], "tolerance": 30, "description": "gray text"},
+    {"rgb": [255, 38, 40], "tolerance": 40, "description": "red1"},
+    {"rgb": [198, 154, 95], "tolerance": 30, "description": "red2"},
+    {"rgb": [168, 139, 90], "tolerance": 30, "description": "red3"},
+    {"rgb": [224, 154, 113], "tolerance": 30, "description": "red4"}
   ],
   "water_colors": {
     "river": {"rgb": [25, 147, 185], "tolerance": 30},
