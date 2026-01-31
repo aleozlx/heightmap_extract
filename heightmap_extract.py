@@ -59,6 +59,7 @@ def load_colormap(path):
     Returns:
         elevation_colors: List of (rgb, elevation) tuples
         mask_colors: List of rgb values
+        water_colors: Dict with 'river' and 'lake' entries (rgb, tolerance)
         elev_min: Minimum elevation in colormap
         elev_max: Maximum elevation in colormap
     """
@@ -68,11 +69,20 @@ def load_colormap(path):
     elevation_colors = [(item['rgb'], item['elevation']) for item in data['elevation_colors']]
     mask_colors = [item['rgb'] for item in data.get('mask_colors', [])]
 
+    # Parse water colors (river, lake)
+    water_colors = {}
+    if 'water_colors' in data:
+        for key, val in data['water_colors'].items():
+            water_colors[key] = {
+                'rgb': np.array(val['rgb']),
+                'tolerance': val.get('tolerance', 30)
+            }
+
     elevations = [item['elevation'] for item in data['elevation_colors']]
     elev_min = min(elevations)
     elev_max = max(elevations)
 
-    return elevation_colors, mask_colors, elev_min, elev_max
+    return elevation_colors, mask_colors, water_colors, elev_min, elev_max
 
 
 def load_image(path):
@@ -136,36 +146,52 @@ def detect_mask_rgb(image):
     return red_mask | white_mask | black_mask | gray_mask
 
 
-def detect_rivers(image, elevation):
+def detect_rivers(image, elevation, water_colors):
     """
-    Detect river pixels (blue-ish in land areas).
+    Detect river and lake pixels by color matching.
 
-    Rivers are characterized by:
-    - B > R AND B > G (blue dominant)
-    - elevation > -100 (in land areas, not ocean)
+    Uses specific colors from colormap with tolerance for anti-aliasing.
+    Checks if pixel is on land by looking at neighboring pixels' elevation.
 
     Args:
         image: RGB or RGBA image as numpy array
         elevation: 2D array of elevation values
+        water_colors: Dict with 'river' and/or 'lake' entries containing rgb and tolerance
 
     Returns:
-        Boolean mask for river pixels (for future special handling)
+        Boolean mask for water pixels (rivers and lakes on land)
     """
     # Handle RGBA
     if image.shape[2] == 4:
         image = image[:, :, :3]
 
-    r = image[:, :, 0].astype(np.float32)
-    g = image[:, :, 1].astype(np.float32)
-    b = image[:, :, 2].astype(np.float32)
+    rgb = image.astype(np.float32)
+    mask = np.zeros(image.shape[:2], dtype=bool)
 
-    # Blue-ish: B > R AND B > G
-    blue_dominant = (b > r) & (b > g)
+    if not water_colors:
+        return mask
 
-    # In land areas (not deep ocean)
-    land_area = elevation > -100
+    # Check if surrounded by land using max filter on elevation
+    # A pixel is "on land" if nearby pixels have positive elevation
+    land_nearby = ndimage.maximum_filter(elevation, size=7) > 50
 
-    return blue_dominant & land_area
+    for water_type, info in water_colors.items():
+        target_rgb = info['rgb'].astype(np.float32)
+        tolerance = info['tolerance']
+
+        # Euclidean distance in RGB space
+        dist = np.sqrt(np.sum((rgb - target_rgb) ** 2, axis=2))
+        color_match = dist < tolerance
+
+        # Rivers/lakes must be surrounded by land
+        water_mask = color_match & land_nearby
+        mask |= water_mask
+
+        count = np.sum(water_mask)
+        if count > 0:
+            print(f"  {water_type}: {count:,} pixels")
+
+    return mask
 
 
 def detect_elevation_artifacts(heightmap, window_size=5, threshold=300.0):
@@ -384,6 +410,7 @@ def create_visualization(map_region, heightmap, mask, output_path,
 
 def process_map(input_path, output_dir='.', smoothing=SMOOTHING_SIGMA,
                 elevation_colors=None, elev_min=None, elev_max=None,
+                water_colors=None,
                 elev_artifact_threshold=300.0, dilate_iterations=3,
                 mesh_scale=(100.0, 100.0, 20.0), mesh_decimate=4):
     """
@@ -444,9 +471,9 @@ def process_map(input_path, output_dir='.', smoothing=SMOOTHING_SIGMA,
     print(f"  RGB mask: {mask_rgb.sum()} pixels ({100*mask_rgb.mean():.1f}%)")
 
     # Step 4: River detection (separate layer)
-    print("Detecting rivers...")
-    rivers = detect_rivers(map_region, heightmap_raw)
-    print(f"  Rivers detected: {rivers.sum()} pixels ({100*rivers.mean():.1f}%)")
+    print("Detecting rivers/lakes...")
+    rivers = detect_rivers(map_region, heightmap_raw, water_colors or {})
+    print(f"  Total water detected: {rivers.sum()} pixels ({100*rivers.mean():.1f}%)")
 
     # Step 5: Elevation-space artifact detection
     print(f"Detecting elevation artifacts (threshold={elev_artifact_threshold}m)...")
@@ -636,11 +663,13 @@ Notes:
         return 1
 
     print(f"Loading colormap: {args.colormap}")
-    elevation_colors, mask_colors, elev_min, elev_max = load_colormap(args.colormap)
+    elevation_colors, mask_colors, water_colors, elev_min, elev_max = load_colormap(args.colormap)
     print(f"  Elevation range: {elev_min}m to {elev_max}m")
+    if water_colors:
+        print(f"  Water colors: {', '.join(water_colors.keys())}")
 
     process_map(args.input, args.output_dir, args.smoothing,
-                elevation_colors, elev_min, elev_max,
+                elevation_colors, elev_min, elev_max, water_colors,
                 args.elev_artifact_threshold, args.dilate_iterations,
                 mesh_scale, args.mesh_decimate)
 

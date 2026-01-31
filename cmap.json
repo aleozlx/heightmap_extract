@@ -23,5 +23,9 @@
     {"rgb": [50, 50, 50], "description": "dark gray text"},
     {"rgb": [255, 38, 40], "description": "red border"},
     {"rgb": [198, 154, 95], "description": "red border variant"}
-  ]
+  ],
+  "water_colors": {
+    "river": {"rgb": [25, 147, 185], "tolerance": 30},
+    "lake": {"rgb": [238, 245, 252], "tolerance": 15}
+  }
 }
