@@ -1,4 +1,6 @@
-# Hypsometric Map to Heightmap Converter
+# Hypsometric Map Extraction and Mesh Generation
+
+- written by @claude 🤖
 
 Converts color-coded elevation maps (hypsometric coloring) to grayscale heightmaps and 3D meshes suitable for 3D printing, game engines, or terrain visualization.
 
