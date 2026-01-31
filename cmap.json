@@ -2,31 +2,31 @@
   "name": "hypsometric_standard",
   "description": "Standard hypsometric coloring extracted from map legend",
   "elevation_colors": [
-    {"rgb": [177, 126,  81], "elevation": 5500},
-    {"rgb": [200, 160,  99], "elevation": 5000},
-    {"rgb": [207, 180, 114], "elevation": 3000},
-    {"rgb": [222, 207, 146], "elevation": 2000},
-    {"rgb": [228, 225, 153], "elevation": 1000},
-    {"rgb": [185, 208, 121], "elevation":  500},
-    {"rgb": [142, 186, 113], "elevation":  200},
-    {"rgb": [238, 245, 255], "elevation":    0},
-    {"rgb": [222, 233, 255], "elevation": -200},
-    {"rgb": [200, 221, 244], "elevation": -1000},
-    {"rgb": [177, 208, 239], "elevation": -2000},
-    {"rgb": [151, 192, 231], "elevation": -3000},
-    {"rgb": [115, 172, 221], "elevation": -5000}
+    {"color": "#B17E51", "elevation": 5500},
+    {"color": "#C8A063", "elevation": 5000},
+    {"color": "#CFB472", "elevation": 3000},
+    {"color": "#DECF92", "elevation": 2000},
+    {"color": "#E4E199", "elevation": 1000},
+    {"color": "#B9D079", "elevation":  500},
+    {"color": "#8EBA71", "elevation":  200},
+    {"color": "#EEF5FF", "elevation":    0},
+    {"color": "#DEE9FF", "elevation": -200},
+    {"color": "#C8DDF4", "elevation": -1000},
+    {"color": "#B1D0EF", "elevation": -2000},
+    {"color": "#97C0E7", "elevation": -3000},
+    {"color": "#73ACDD", "elevation": -5000}
   ],
   "mask_colors": [
-    {"rgb": [255, 255, 255], "tolerance": 15, "description": "white background"},
-    {"rgb": [0, 0, 0], "tolerance": 50, "description": "black text"},
-    {"rgb": [128, 128, 128], "tolerance": 30, "description": "gray text"},
-    {"rgb": [255, 38, 40], "tolerance": 40, "description": "red1"},
-    {"rgb": [198, 154, 95], "tolerance": 30, "description": "red2"},
-    {"rgb": [168, 139, 90], "tolerance": 30, "description": "red3"},
-    {"rgb": [224, 154, 113], "tolerance": 30, "description": "red4"}
+    {"color": "#FFFFFF", "tolerance": 15, "description": "white background"},
+    {"color": "#000000", "tolerance": 50, "description": "black text"},
+    {"color": "#808080", "tolerance": 30, "description": "gray text"},
+    {"color": "#FF2628", "tolerance": 40, "description": "red1"},
+    {"color": "#C69A5F", "tolerance": 30, "description": "red2"},
+    {"color": "#A88B5A", "tolerance": 30, "description": "red3"},
+    {"color": "#E09A71", "tolerance": 30, "description": "red4"}
   ],
   "water_colors": {
-    "river": {"rgb": [25, 147, 185], "tolerance": 30},
-    "lake": {"rgb": [238, 245, 252], "tolerance": 15}
+    "river": {"color": "#1993B9", "tolerance": 30},
+    "lake": {"color": "#EEF5FC", "tolerance": 15}
   }
 }

@@ -38,27 +38,50 @@ ELEVATION_MIN = -5000     # Default minimum elevation for normalization
 ELEVATION_MAX = 6000      # Default maximum elevation for normalization
 
 
+def parse_color(item):
+    """
+    Parse color from JSON item, supporting both hex (#RRGGBB) and rgb ([R,G,B]) formats.
+
+    Args:
+        item: Dict with either 'color' (hex string) or 'rgb' (list) key
+
+    Returns:
+        List of [R, G, B] values
+    """
+    if 'color' in item:
+        hex_str = item['color'].lstrip('#')
+        return [int(hex_str[i:i+2], 16) for i in (0, 2, 4)]
+    elif 'rgb' in item:
+        return item['rgb']
+    else:
+        raise ValueError("Color entry must have 'color' (hex) or 'rgb' (array) key")
+
+
 def load_colormap(path):
     """
     Load elevation colors from JSON file.
 
-    Expected JSON format:
+    Expected JSON format (hex colors preferred for IDE preview):
     {
       "elevation_colors": [
-        {"rgb": [255, 251, 250], "elevation": 4500},
-        {"rgb": [151, 190, 125], "elevation": 100},
+        {"color": "#B17E51", "elevation": 5500},
+        {"color": "#8EBA71", "elevation": 200},
         ...
       ],
       "mask_colors": [
-        {"rgb": [255, 255, 255], "description": "white background"},
-        {"rgb": [0, 0, 0], "description": "black text"},
+        {"color": "#FFFFFF", "tolerance": 15, "description": "white"},
+        {"color": "#FF2628", "tolerance": 40, "description": "red border"},
         ...
-      ]
+      ],
+      "water_colors": {
+        "river": {"color": "#1993B9", "tolerance": 30},
+        "lake": {"color": "#EEF5FC", "tolerance": 15}
+      }
     }
 
     Returns:
         elevation_colors: List of (rgb, elevation) tuples
-        mask_colors: List of rgb values
+        mask_colors: List of dicts with rgb, tolerance, description
         water_colors: Dict with 'river' and 'lake' entries (rgb, tolerance)
         elev_min: Minimum elevation in colormap
         elev_max: Maximum elevation in colormap
@@ -66,13 +89,13 @@ def load_colormap(path):
     with open(path) as f:
         data = json.load(f)
 
-    elevation_colors = [(item['rgb'], item['elevation']) for item in data['elevation_colors']]
+    elevation_colors = [(parse_color(item), item['elevation']) for item in data['elevation_colors']]
 
     # Parse mask colors with tolerance
     mask_colors = []
     for item in data.get('mask_colors', []):
         mask_colors.append({
-            'rgb': np.array(item['rgb']),
+            'rgb': np.array(parse_color(item)),
             'tolerance': item.get('tolerance', 30),
             'description': item.get('description', '')
         })
@@ -82,7 +105,7 @@ def load_colormap(path):
     if 'water_colors' in data:
         for key, val in data['water_colors'].items():
             water_colors[key] = {
-                'rgb': np.array(val['rgb']),
+                'rgb': np.array(parse_color(val)),
                 'tolerance': val.get('tolerance', 30)
             }
 
